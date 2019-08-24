@@ -16,6 +16,7 @@ import pandas as pd
 import requests, json, hashlib, urllib, datetime
 import time
 import config as cfg
+import datetime
 #from apscheduler.schedulers.blocking import BlockingScheduler
 
 #Gsched = BlockingScheduler()
@@ -240,6 +241,7 @@ def plot_sugar(plot_date,ax=None,lowOK=3.4,highOK=10,basal_name='HumulinN',
     inrange_posto=0
     minute=0
     maxMinute=30
+    maxInsulinOk = 35
     if "{:%Y-%m-%d}".format(plot_date) in sgv.index:
         tmp_sgv = sgv["{:%Y-%m-%d}".format(plot_date)]
 
@@ -271,7 +273,7 @@ def plot_sugar(plot_date,ax=None,lowOK=3.4,highOK=10,basal_name='HumulinN',
     ax.set_title(title,fontsize=12,fontweight='bold')
     ax.xaxis_date('Europe/Zagreb')
     ukupno_col='lightblue'
-    if ukupno_insulin>30:
+    if ukupno_insulin > maxInsulinOk:
         ukupno_col='red'
     ax.text(0.15,0.9,"Ukupno insulin:{:d}".format(int(ukupno_insulin)),fontsize="14",bbox=dict(boxstyle="round",
     ec= 'white',fc=ukupno_col),transform=ax.transAxes,color='black')
@@ -292,14 +294,13 @@ def plot_main():
     dates=[dt for dt in [datetime.datetime.now()-datetime.timedelta(days=n) for n in range(0,5)]]
     plt.close('all')
     fig, ax = plt.subplots(5,1,figsize=(12,20))
-    for i,date in enumerate(dates):
-        print(date)
-        plot_sugar(date,ax=ax[i])
-    
+ 
+    #Get last bg value
     try:
         last=pd.read_json("http://karol1.herokuapp.com/api/v1/entries/sgv.json?count=1")
         last_sgv="{:.1f}".format((last.sgv/18.).values[0])
         last_dir=last.direction
+        print(last_sgv,last_dir.values[0])
         boje={'FortyFiveDown':'pink','SingleDown':'salmon','DoubleDown':'red','FortyFiveUp':'khaki','SingleUp':'yellow','DoubleUp':'orange','Flat':'white'}
         strelice={'FortyFiveDown':'\u2198','SingleDown':'\u2193','DoubleDown':'\u2193 \u2193','FortyFiveUp':'\u2197','SingleUp':'\u2191','DoubleUp':'\u2191 \u2191','Flat':'\u2192'}
         col=boje[last_dir.values[0]]
@@ -308,21 +309,48 @@ def plot_main():
         #fig.text(0.57,0.988,"Ukupno: {:.0f}min".format(ukupno_minute),fontsize="14",bbox=dict(boxstyle="round",ec= 'gold',fc='gold'))
     except:
         pass
-    
-    
-    #last_sgv="{:.1f}".format((pd.read_json("http://karol1.herokuapp.com/api/v1/entries/sgv.json?count=1").sgv/18.).values[0])
-    fig.tight_layout()
-    print("prije crtanja")
-    plt.savefig("glimp_karol.svg")
-    print("nakon crtanja svgg")
-    plt.savefig("glimp_karol.png")
-    print("nakon crtanja png")
 
+    now=pd.to_datetime(datetime.datetime.now(),utc=True).tz_convert('Europe/Zagreb')
+    deltaT = now - last_time
+    deltaTh = deltaT.components.hours
+    
     #Za Pushover 
     plt.close('all')
     emoji = True
     push = False
+    disconnect_warn = False
+   
+    with open("upozorenje.dat","r") as f:
+        broj=int(f.read())
+    if deltaTh > 1:
+        disconnect_warn = True
+        if broj<5:
+            poruka = "Karol, malo si predugo odspojen, daj vidi kaj ne stima. Zadnji podaci su od: {:%H:%H} ".format(last_time)
+        elif broj == 5:
+            poruka = "Karol, malo si predugo odspojen, daj vidi kaj ne stima. Zadnji podaci su od: {:%H:%H}. Upozorio sam te vec 5 puta, vise necu. ".format(last_time)
+        else:
+            disconnect_warn = False
+    else:
+        with open("upozorenje.dat","w") as f:
+            f.write("0")
+   
+    if disconnect_warn:
+        ts = time.time()
+        r = requests.post("https://api.pushover.net/1/messages.json", data={"token":"a9brnzcafrx482iw9vtrgzr6t4xsyk","user":"ugy7k8aq6qkip3gsa5vn9vfyadenst","message":poruka,"title":"Oprez -  nema vrijednosti secera!","timestamp":ts,"sound":"tugboat"})
+        broj=broj+1
+        with open("upozorenje.dat","w") as f:
+            f.write("{:d}".format(broj))
+
+#Upozorenja na razne vrijednosti secera
+    if float(last_sgv)>11 and (last_dir.values[0] == 'SingleUp' or last_dir.values[0] == 'DoubleUp'):
+        poruka = "Kavoc, malo ti je secer visok, jesi si ti dal inzulina!?  \U0001F489  \U0001F489"
+        push = True
+    if float(last_sgv)>12 and last_dir.values[0] == 'FortyFiveUp':
+        poruka = "Kavoc, staje rasti al je visok... Jesi si ti dal inzulina!?  \U0001F489  \U0001F489"
+        push = True
+
     if float(last_sgv)<9 and last_dir.values[0] == 'DoubleDown':
+        print("Upozorenje 1")
         push = True
 #https://github.com/carpedm20/emoji/blob/master/emoji/unicode_codes.py
 #https://www.webfx.com/tools/emoji-cheat-sheet/
@@ -347,14 +375,20 @@ def plot_main():
         ts = time.time()
         r = requests.post("https://api.pushover.net/1/messages.json", data={"token":"a9brnzcafrx482iw9vtrgzr6t4xsyk","user":"ugy7k8aq6qkip3gsa5vn9vfyadenst","message":poruka,"title":"Oprez!","timestamp":ts,"sound":"tugboat"},files={"attachment": ("image.jpg", open("pushover_karol.png", "rb"), "image/jpeg")})
         print(r.text)
-    
-    
-    #plot_date=datetime.datetime.now()
-#plt.close('all')
-#fig, ax = plt.subplots(figsize=(12,5))
-#plot_sugar(plot_date=plot_date,ax=ax)
 
-#plt.savefig("test.png")
+    print("Plotting") 
+    for i,date in enumerate(dates):
+        print(date)
+        plot_sugar(date,ax=ax[i])
+    #last_sgv="{:.1f}".format((pd.read_json("http://karol1.herokuapp.com/api/v1/entries/sgv.json?count=1").sgv/18.).values[0])
+    fig.tight_layout()
+    print("prije crtanja")
+    plt.savefig("glimp_karol.svg")
+    print("nakon crtanja svgg")
+    plt.savefig("glimp_karol.png")
+    print("nakon crtanja png")
+
+    
 plot_main()
 #sched.start()
 
